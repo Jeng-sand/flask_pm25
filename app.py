@@ -1,76 +1,80 @@
-from flask import Flask,render_template,request
-from datetime import datetime
 import pandas as pd
 import pymysql
-from pm25 import get_pm25_data_from_mysql
-
-app=Flask(__name__)
-
-@app.route("/")
-def index():
-    colums,datas= get_pm25_data_from_mysql()
-    return render_template("index.html" , colums=colums,datas=datas)
-
-@app.route("/books")
-def books_index():
-    books=[
-    {
-        "name":"Python book",
-        "price":299,
-        "image_url":"https://im2.book.com.tw/image/getImage?i=https://www.books.com.tw/img/CN1/136/11/CN11361197.jpg&v=58096f9ck&w=348&h=348"
-    },
-    {
-
-        "name":"Java book",
-        "price":399,
-        "image_url":"https://im1.book.com.tw/image/getImage?i=https://www.books.com.tw/img/001/087/31/0010873110.jpg&v=5f7c475bk&w=348&h=348"
-    },
-    {
-        "name":"C# book",
-        "price":499,
-        "image_url":"https://im1.book.com.tw/image/getImage?i=https://www.books.com.tw/img/001/036/04/0010360466.jpg&v=62d695bak&w=348&h=348"
-    },
-    ]
-
-    #books = []
-
-    if books:
-        for book in books:
-            print(book["name"])
-            print(book["price"])
-            print(book["image_url"])
-        else:
-            print("販售完畢，目前無書籍!")
-
-    #return f"<h1>Hello world!</h1><br>{datetime.now()}"
-    username = "sand"
-    nowtime = datetime.now().strftime("%Y-%m-%d")
-    print(username,nowtime)
-    return render_template("books.html",name=username ,now=nowtime, books=books)
-
-@app.route("/bmi")
-def get_bmi():
-    # args =>GET
-    height=eval(request.args.get("height"))
-    weight=eval(request.args.get("weight"))
-
-    bmi=round(weight / (height / 100 ) **2,2)
-
-    
-    #return {"height": height, "weight":weight ,"bmi":bmi}
-    #return render_template("bmi.html", bmi=bmi ,height=height,weight=weight)
-    return render_template("bmi.html",**locals())
 
 
+# 更新資料庫
+def update_db():
+    api_url = "https://data.moenv.gov.tw/api/v2/aqx_p_02?api_key=540e2ca4-41e1-4186-8497-fdd67024ac44&limit=1000&sort=datacreationdate%20desc&format=CSV"
+    sqlstr = """
+        insert ignore into pm25(site,county,pm25,datacreationdate,itemunit) 
+        values(%s,%s,%s,%s,%s)
+    """
+    row_count = 0
+    message = ""
+    try:
+        # 讀取最新的雲端資料
+        df = pd.read_csv(api_url)
+        df["datacreationdate"] = pd.to_datetime(df["datacreationdate"])
+        df1 = df.dropna()
+        values = df1.values.tolist()
+        # 寫入資料庫
+        conn = open_db()
+        cur = conn.cursor()
+        cur.executemany(sqlstr, values)
+        row_count = cur.rowcount
+        conn.commit()
 
-@app.route("/pm25-data")
-def get_pm25_data():
-    api_url="https://data.moenv.gov.tw/api/v2/aqx_p_02?api_key=540e2ca4-41e1-4186-8497-fdd67024ac44&limit=1000&sort=datacreationdate%20desc&format=CSV"
-    df=pd.read_csv(api_url)
-    df["datacreationdate"]=pd.to_datetime(df["datacreationdate"])
-    df1=df.dropna()
-    return df1
+        print(f"更新{row_count}筆資料成功!")
+        message = "更新資料庫成功!"
 
-if __name__=="__main__":
-    app.run(debug=True)
+    except Exception as e:
+        print(e)
+        message = f"更新資料庫失敗:{e}"
+    finally:
+        if conn is not None:
+            conn.close()
 
+    return row_count, message
+
+
+def open_db():
+    conn = None
+    try:
+        conn = pymysql.connect(
+            host="127.0.0.1", port=3306, user="root", passwd="12345678", db="demo"
+        )
+    except Exception as e:
+        print("資料庫開啟失敗", e)
+
+    return conn
+
+
+def get_pm25_data_from_mysql():
+    conn = None
+    columns, datas = None, None
+    try:
+        conn = open_db()
+        cur = conn.cursor()
+        # sqlstr = "select MAX(datacreationdate) from pm25;"
+        # cur.execute(sqlstr)
+        # last_time = cur.fetchone()[0]
+        # print(last_time)
+        sqlstr = "select * from pm25 where datacreationdate=(select MAX(datacreationdate) from pm25);"
+        cur.execute(sqlstr)
+        # 輸出資料表欄位
+        print(cur.description)
+        columns = [col[0] for col in cur.description]
+        # 實際的資料
+        datas = cur.fetchall()
+    except Exception as e:
+        print(e)
+    finally:
+        if conn is not None:
+            conn.close()
+
+    return columns, datas
+
+
+# 本地運行
+if __name__ == "__main__":
+    update_db()
